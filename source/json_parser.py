@@ -224,6 +224,8 @@ def parse_solver(spec):
         max_ref = ast.literal_eval(read(spec['max_ref']))
 
         solver = DeepCegar(max_ref)
+    elif algorithm == 'empty':
+        solver = Empty()
 
     return solver
 

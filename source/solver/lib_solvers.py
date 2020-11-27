@@ -1,6 +1,7 @@
 from solver.optimize_impl import OptimizeImpl
 from solver.sprt_impl import SPRTImpl
 from solver.deepcegar_impl import DeepCegarImpl
+from solver.newsol_impl import EmptyImpl
 
 
 class Optimize():
@@ -27,4 +28,9 @@ class DeepCegar():
 
     def solve(self, model, assertion, display=None):
         impl = DeepCegarImpl(self.max_ref)
+        impl.solve(model, assertion, display)
+
+class Empty():
+    def solve(self, model, assertion, display=None):
+        impl = EmptyImpl()
         impl.solve(model, assertion, display)
