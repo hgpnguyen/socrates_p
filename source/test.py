@@ -70,54 +70,6 @@ def generate_sample(model, layer_idx, lst_poly):
     
     return input_x, generate_y
 
-def prove(coef, intercept):
-    s = Solver()
-    x1, x2, x3, x4, x5, x6, x7, x8, x9, x10, x11, x12 = Reals('x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12')
-    
-    P1 = And([x1 >= -1, x1 <= 1, x2 >= -1, x2 <= 1, x3 <= x1 + x2, x3 >= x1 + x2, x4 <= x1 - x2, x4 >= x1 - x2])
-    P2 = And([x3 >= -2, x3 <= 2, x4 >= -2, x4 <= 2, x5 >= 0, x5 <= 0.5*x3 + 1, x6 >= 0, x6 <= 0.5*x4 + 1, x7 >= x5 + x6, x7 <= x5 + x6,
-              x8 >= x5 - x6, x8 <= x5 - x6, x9 >= x7, x9 >= x7, x10 >= 0, x10 <= 0.5*x8 + 1,
-              x11 >= x9 + x10 + 1, x11 <= x9 + x10 + 1, x12 >= x10, x12 <= x10])
-    f = coef[0]*x3 + coef[1]*x4 + intercept > 0
-    
-    Property = ForAll([x3, x4], x12 < x11)
-              
-    s.push()
-    s.add(Not(Implies(And(P1, P2), Property))) #if unsat then Property hold
-    r = s.check()
-    print(r)
-    if r == unsat:
-        print("Property hold")
-    s.pop()
-    
-    s.push()
-    s.add(Not(Implies(P1, f))) #if unsat then P1 => f is valid
-    r = s.check()
-    print(r)
-    if r == unsat:
-        print("P1 => f is valid")
-    else:
-        print("P1 => f is not valid")       
-    s.pop()
-    
-    s.add(Not(Implies(And(P2, f), Property))) #if unsat then P2 and f => Property is valid
-
-    r = s.check()
-    print(r)
-    if r == unsat:
-        print("P2 and f => Property is valid")
-    else:
-        print("P2 and f => Property is not valid")
-
-    s.add(Not(Implies(P2, Property))) #if unsat then P2 => Property is valid
-    r = s.check()
-    print(r)
-    if r == unsat:
-        print("P2 => Property is valid")
-    else:
-        print("P2 => Property is not valid")
-        print(s.model())
-
 def dot(a, b):
     return simplify(Sum([x*y for x, y in zip(a,b)]))
 
@@ -142,8 +94,8 @@ def prove2(x0, idx_ly, clf, model, lst_poly):
     s = Solver()
 
     P1, index, X = getConstraints(lst_poly, 1, 0, idx_ly + 1)
-    print(P1)
     P2, index, y = getConstraints(lst_poly, index, idx_ly + 1, len(lst_poly))
+    print(P1)
     print(P2)
 
     y0_arg = np.argmax(model.apply(np.array([x0])), axis=1)[0]
@@ -159,6 +111,9 @@ def prove2(x0, idx_ly, clf, model, lst_poly):
     print(r)
     if r == unsat:
         print("Property hold")
+    else:
+        print("Property not hold")
+        print(s.model())
     s.pop()
     
     s.push()
@@ -168,18 +123,22 @@ def prove2(x0, idx_ly, clf, model, lst_poly):
     if r == unsat:
         print("P1 => f is valid")
     else:
-        print("P1 => f is not valid")       
+        print("P1 => f is not valid")
+        print(s.model())
     s.pop()
     
+    s.push()
     s.add(Not(Implies(And(P2, f), Property))) #if unsat then P2 and f => Property is valid
-
     r = s.check()
     print(r)
     if r == unsat:
         print("P2 and f => Property is valid")
     else:
         print("P2 and f => Property is not valid")
+        print(s.model())
+    s.pop()
 
+    s.push()
     s.add(Not(Implies(P2, Property))) #if unsat then P2 => Property is valid
     r = s.check()
     print(r)
@@ -188,11 +147,12 @@ def prove2(x0, idx_ly, clf, model, lst_poly):
     else:
         print("P2 => Property is not valid")
         print(s.model())
+    s.pop()
         
 
 def main():
     base_path = Path(__file__).parent
-    model_path = base_path / "./deeppoly_model/spec.json"
+    model_path = base_path / "./deeppoly_model/spec_Cegar.json"
     with open(model_path, 'r') as f:
         spec = json.load(f)
 
@@ -200,22 +160,28 @@ def main():
     add_solver(spec)
     
     model, assertion, solver, display = parse(spec)
-
-
+    x0 = np.array([0,0])
+    print("Label of x0: {}".format(model.apply(np.array([x0])).argmax(axis=1)[0]))
+    
     print("Sample after relu layer")
     #Sample after relu layer 
     lst_poly = buildDeepPoly(model)
-    idx_ly = 1
+
+    
+    idx_ly = 1 
     input_x, generate_y = generate_sample(model, idx_ly, lst_poly)
 
-    label = [a == b for a, b in zip(np.argmax(input_x, axis=1), np.argmax(generate_y, axis=1))]
+    label = [x0.argmax() == y.argmax() for y in generate_y]
     label = np.array(label, dtype=int)
+    #print(input_x)
+    #print(generate_y)
+    #print(label)
     clf = svm.LinearSVC()
     clf.fit(input_x, label)
     print(clf.coef_)
     print(clf.intercept_)
     #prove(clf.coef_[0], clf.intercept_[0])
-    prove2([0,0], idx_ly + 1, clf, model, lst_poly)
+    prove2(x0, idx_ly + 1, clf, model, lst_poly)
 
     
 
