@@ -7,6 +7,7 @@ from z3 import *
 from model.lib_models import Model
 from utils import *
 from pathlib import Path
+from assertion.lib_functions import d2
 
 def add_assertion(spec):
     assertion = dict()
@@ -44,7 +45,38 @@ def buildDeepPoly(model):
         lst_poly.append(xi_poly_curr)
     return lst_poly
 
-def generate_sample(model, layer_idx, lst_poly):
+def generate_sample(no_sp, model, const):
+    idx = 0
+    size = np.prod(model.shape)
+    sample = np.zeros((no_sp, size))
+    y_sample = []
+                  
+    x_idx = -1
+    for i in range(size):
+        if const[i] != 0 :
+            x_idx = i
+            break
+    mask = np.ones(size, dtype=bool)
+    mask[x_idx] = False
+    coef = np.array(const[:-1])
+    intercept = const[-1]
+    
+    while idx < no_sp:
+        x = generate_x(size - 1, model.lower[mask], model.upper[mask])
+        last = (-intercept - np.dot(coef[mask], x))/coef[x_idx]
+        if last > model.lower[x_idx] and last < model.upper[x_idx]:
+            x = np.insert(x, x_idx, last)
+            sample[idx] = x
+            y_sample.append(model.apply(x))
+            idx += 1
+    return sample, np.array(y_sample)
+
+
+
+        
+        
+
+def generate_const(x0, model, layer_idx, lst_poly):
     if layer_idx == -1 or layer_idx >= len(model.layers):
         new_model = model
     else:       
@@ -62,16 +94,49 @@ def generate_sample(model, layer_idx, lst_poly):
     input_x = np.zeros((n, size))
     
     for i in range(n):
-        x0 = generate_x(size, new_model.lower, new_model.upper)
-        y0 = new_model.apply(x0)
-        generate_y[i] = y0
-        input_x[i] = x0
+        x = generate_x(size, new_model.lower, new_model.upper)
+        y = new_model.apply(x)
+        generate_y[i] = y
+        input_x[i] = x
 
+    y0 = model.apply(x0)
+    label = [y0.argmax() == y.argmax() for y in generate_y]
+    label = np.array(label, dtype=int)
+
+    clf = svm.LinearSVC()
+    clf.fit(input_x, label)
+    const = np.concatenate((clf.coef_[0], clf.intercept_))
+    #print(const)
     
-    return input_x, generate_y
+    while True:
+        clf = svm.LinearSVC()
+        sample, y_sample = generate_sample(10, new_model, const)
+        new_label = np.array([y0.argmax() == y.argmax() for y in y_sample], dtype=int)
+        input_x = np.concatenate((input_x, sample))
+        label = np.concatenate((label, new_label))
+        clf.fit(input_x, label)
+        #print(np.concatenate((clf.coef_[0], clf.intercept_)))
+        if d2(np.array(const), np.concatenate((clf.coef_[0], clf.intercept_))) < 0.0001:
+            break
+        const = np.concatenate((clf.coef_[0], clf.intercept_))
+        
+    
+    return const
 
 def dot(a, b):
     return simplify(Sum([x*y for x, y in zip(a,b)]))
+
+def valid_prove(a, b, msg = "a => b"):
+    s = Solver()
+    s.add(Not(Implies(a, b)))
+    r = s.check()
+    if r == unsat:
+        print(msg + " is valid")
+    elif r == sat:
+        print(msg + " not valid")
+        print("Counterexample:", s.model())
+    else:
+        print("Unknown")
 
 def getConstraints(lst_poly, index, start, end):
     if start == 0:
@@ -90,7 +155,7 @@ def getConstraints(lst_poly, index, start, end):
         pre_X = X + [1]
     return And(P), index, X
 
-def prove2(x0, idx_ly, clf, model, lst_poly):
+def prove(x0, idx_ly, const, model, lst_poly):
     s = Solver()
 
     P1, index, X = getConstraints(lst_poly, 1, 0, idx_ly + 1)
@@ -102,52 +167,16 @@ def prove2(x0, idx_ly, clf, model, lst_poly):
     Property = And([ForAll(X, y[y0_arg] > y[i]) for i in range(len(y)) if i != y0_arg])
     print(Property)
 
-    f = dot(X + [1], [*clf.coef_[0], *clf.intercept_]) > 0 
+    f = dot(X + [1], const) > 0 
     print(f)
 
-    s.push()
-    s.add(Not(Implies(And(P1, P2), Property))) #if unsat then Property hold
-    r = s.check()
-    print(r)
-    if r == unsat:
-        print("Property hold")
-    else:
-        print("Property not hold")
-        print(s.model())
-    s.pop()
+    valid_prove(And(P1, P2), Property, "P1 and P2 => Property")
     
-    s.push()
-    s.add(Not(Implies(P1, f))) #if unsat then P1 => f is valid
-    r = s.check()
-    print(r)
-    if r == unsat:
-        print("P1 => f is valid")
-    else:
-        print("P1 => f is not valid")
-        print(s.model())
-    s.pop()
-    
-    s.push()
-    s.add(Not(Implies(And(P2, f), Property))) #if unsat then P2 and f => Property is valid
-    r = s.check()
-    print(r)
-    if r == unsat:
-        print("P2 and f => Property is valid")
-    else:
-        print("P2 and f => Property is not valid")
-        print(s.model())
-    s.pop()
+    valid_prove(P1, f, "P1 => f")
 
-    s.push()
-    s.add(Not(Implies(P2, Property))) #if unsat then P2 => Property is valid
-    r = s.check()
-    print(r)
-    if r == unsat:
-        print("P2 => Property is valid")
-    else:
-        print("P2 => Property is not valid")
-        print(s.model())
-    s.pop()
+    valid_prove(And(P2, f), Property, "P2 and f = > Property")
+
+    valid_prove(P2, Property, "P2 => Property")
         
 
 def main():
@@ -168,20 +197,14 @@ def main():
     lst_poly = buildDeepPoly(model)
 
     
-    idx_ly = 1 
-    input_x, generate_y = generate_sample(model, idx_ly, lst_poly)
+    idx_ly = 1
+    const = generate_const(x0, model, idx_ly, lst_poly)
+    print(const)
 
-    label = [x0.argmax() == y.argmax() for y in generate_y]
-    label = np.array(label, dtype=int)
-    #print(input_x)
-    #print(generate_y)
-    #print(label)
-    clf = svm.LinearSVC()
-    clf.fit(input_x, label)
-    print(clf.coef_)
-    print(clf.intercept_)
-    #prove(clf.coef_[0], clf.intercept_[0])
-    prove2(x0, idx_ly + 1, clf, model, lst_poly)
+
+
+
+    prove(x0, idx_ly + 1, const, model, lst_poly)
 
     
 

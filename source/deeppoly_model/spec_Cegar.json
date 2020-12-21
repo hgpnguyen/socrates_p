@@ -1,0 +1,31 @@
+{
+    "model": {
+        "shape": "(1,2)",
+        "bounds": "[(-1, 1)]",
+        "layers": [
+            {
+                "type": "linear",
+                "weights": "[[1,-2],[1,1]]",
+                "bias": "[1,-2]"
+            },
+            {
+                "type": "function",
+                "func": "relu"
+            },
+            {
+                "type": "linear",
+                "weights": "[[1,-2],[0,2]]",
+                "bias": "[1,-1]"
+            },
+            {
+                "type": "function",
+                "func": "relu"
+            },
+            {
+                "type": "linear",
+                "weights": "[[1,-1],[-2,-2]]",
+                "bias": "[-2,-1]"
+            }
+        ]
+    }
+}
