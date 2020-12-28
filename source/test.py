@@ -8,6 +8,7 @@ from model.lib_models import Model
 from utils import *
 from pathlib import Path
 from assertion.lib_functions import d2
+import matplotlib.pyplot as plt
 
 def add_assertion(spec):
     assertion = dict()
@@ -24,6 +25,26 @@ def add_solver(spec):
     solver['algorithm'] = "optimize"
 
     spec['solver'] = solver
+
+def plot(X, y, clf):
+    plt.scatter(X[:, 0], X[:, 1], c=y, cmap=plt.cm.Paired)
+    # plot the decision function
+    ax = plt.gca()
+    xlim = ax.get_xlim()
+    ylim = ax.get_ylim()
+
+    # create grid to evaluate model
+    xx = np.linspace(xlim[0], xlim[1], 30)
+    yy = np.linspace(ylim[0], ylim[1], 30)
+    YY, XX = np.meshgrid(yy, xx)
+    xy = np.vstack([XX.ravel(), YY.ravel()]).T
+    Z = clf.decision_function(xy).reshape(XX.shape)
+
+    # plot decision boundary and margins
+    ax.contour(XX, YY, Z, colors='k', levels=[-1, 0, 1], alpha=0.5,
+               linestyles=['--', '-', '--'])
+    
+    plt.show()
 
 def buildDeepPoly(model):
     x0_poly = Poly()
@@ -66,14 +87,12 @@ def generate_sample(no_sp, model, const):
         last = (-intercept - np.dot(coef[mask], x))/coef[x_idx]
         if last > model.lower[x_idx] and last < model.upper[x_idx]:
             x = np.insert(x, x_idx, last)
+            x = np.around(x, 2)
             sample[idx] = x
             y_sample.append(model.apply(x))
             idx += 1
     return sample, np.array(y_sample)
 
-
-
-        
         
 
 def generate_const(x0, model, layer_idx, lst_poly):
@@ -89,54 +108,68 @@ def generate_const(x0, model, layer_idx, lst_poly):
 
     size = np.prod(new_model.shape)
     
-    n = 100000
+    n = 100
     generate_y = np.zeros((n, size))
     input_x = np.zeros((n, size))
     
     for i in range(n):
         x = generate_x(size, new_model.lower, new_model.upper)
+        x = np.around(x, 2)
         y = new_model.apply(x)
         generate_y[i] = y
         input_x[i] = x
-
     y0 = model.apply(x0)
     label = [y0.argmax() == y.argmax() for y in generate_y]
     label = np.array(label, dtype=int)
 
-    clf = svm.LinearSVC()
+    clf = svm.LinearSVC(loss = "hinge", C=1E20)
     clf.fit(input_x, label)
     const = np.concatenate((clf.coef_[0], clf.intercept_))
-    #print(const)
+    #print(const[-1]/const[0])
+    #plot(input_x, label, clf)
+    #print("score:", clf.score(input_x, label))
+    #prove(x0, layer_idx + 1, const, model, lst_poly)
+    index = 0
     
     while True:
-        clf = svm.LinearSVC()
-        sample, y_sample = generate_sample(10, new_model, const)
+        #clf = svm.SVC(kernel="linear")
+        index += 1
+        #if index % 100 == 0:
+        #    print(const)
+        sample, y_sample = generate_sample(1, new_model, const)
         new_label = np.array([y0.argmax() == y.argmax() for y in y_sample], dtype=int)
         input_x = np.concatenate((input_x, sample))
         label = np.concatenate((label, new_label))
         clf.fit(input_x, label)
         #print(np.concatenate((clf.coef_[0], clf.intercept_)))
-        if d2(np.array(const), np.concatenate((clf.coef_[0], clf.intercept_))) < 0.0001:
+        if abs(const[-1]/const[0] - clf.intercept_[0]/clf.coef_[0][0]) < 0.0000001:
             break
         const = np.concatenate((clf.coef_[0], clf.intercept_))
+
         
-    
+    #plot(input_x, label, clf)
+    #print(index)
+    #print("score:", clf.score(input_x, label))
     return const
 
 def dot(a, b):
     return simplify(Sum([x*y for x, y in zip(a,b)]))
 
-def valid_prove(a, b, msg = "a => b"):
+def valid_prove(a, b, msg = "a => b", out = True):
     s = Solver()
     s.add(Not(Implies(a, b)))
     r = s.check()
+    if out:
+        if r == unsat:
+            print(msg + " is valid")
+        elif r == sat:
+            print(msg + " not valid")
+            print("Counterexample:", s.model())
+        else:
+            print("Unknown")
     if r == unsat:
-        print(msg + " is valid")
-    elif r == sat:
-        print(msg + " not valid")
-        print("Counterexample:", s.model())
-    else:
-        print("Unknown")
+        return True
+    return False
 
 def getConstraints(lst_poly, index, start, end):
     if start == 0:
@@ -160,24 +193,24 @@ def prove(x0, idx_ly, const, model, lst_poly):
 
     P1, index, X = getConstraints(lst_poly, 1, 0, idx_ly + 1)
     P2, index, y = getConstraints(lst_poly, index, idx_ly + 1, len(lst_poly))
-    print(P1)
-    print(P2)
+    #print(P1)
+    #print(P2)
 
     y0_arg = np.argmax(model.apply(np.array([x0])), axis=1)[0]
     Property = And([ForAll(X, y[y0_arg] > y[i]) for i in range(len(y)) if i != y0_arg])
-    print(Property)
+    #print(Property)
 
     f = dot(X + [1], const) > 0 
-    print(f)
+    #print(f)
 
-    valid_prove(And(P1, P2), Property, "P1 and P2 => Property")
+    #valid_prove(And(P1, P2), Property, "P1 and P2 => Property")
     
-    valid_prove(P1, f, "P1 => f")
+    #valid_prove(P1, f, "P1 => f")
 
-    valid_prove(And(P2, f), Property, "P2 and f = > Property")
+    re = valid_prove(And(P2, f), Property, "P2 and f = > Property", False)
 
-    valid_prove(P2, Property, "P2 => Property")
-        
+    #valid_prove(P2, Property, "P2 => Property")
+    return re    
 
 def main():
     base_path = Path(__file__).parent
@@ -198,13 +231,25 @@ def main():
 
     
     idx_ly = 1
-    const = generate_const(x0, model, idx_ly, lst_poly)
-    print(const)
+    valid, notVal = 0, 0
+    listConst = []
+    for i in range(100):
+        const = generate_const(x0, model, idx_ly, lst_poly)
+        re = prove(x0, idx_ly + 1, const, model, lst_poly)
+        if re:
+            valid += 1
+            listConst.append(const[-1]/const[0])
+        else:
+            notVal += 1
+            print("Not valid:", const[-1]/const[0]) 
+    print("Performace of active learning:")
+    print("Valid: {}, Not valid: {}".format(valid, notVal))
+    print("10 first const:\n", np.around(listConst, 4)[0:10])
 
 
 
 
-    prove(x0, idx_ly + 1, const, model, lst_poly)
+    
 
     
 
