@@ -221,11 +221,12 @@ def parse_solver(spec):
 
         solver = SPRT(threshold, alpha, beta, delta)
     elif algorithm == 'deepcegar':
+        has_ref = ast.literal_eval(read(spec['has_ref']))
         max_ref = ast.literal_eval(read(spec['max_ref']))
+        ref_typ = ast.literal_eval(read(spec['ref_typ']))
+        max_sus = ast.literal_eval(read(spec['max_sus']))
 
-        solver = DeepCegar(max_ref)
-    elif algorithm == 'empty':
-        solver = Empty()
+        solver = DeepCegar(has_ref, max_ref, ref_typ, max_sus)
 
     return solver
 

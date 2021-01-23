@@ -5,26 +5,26 @@
         "layers": [
             {
                 "type": "linear",
-                "weights": "[[1,-2],[1,1]]",
-                "bias": "[-1,0]"
+                "weights": "[[2,-2],[2,5]]",
+                "bias": "[-4,3]"
             },
             {
                 "type": "function",
-                "func": "relu"
+                "func": "tanh"
             },
             {
                 "type": "linear",
-                "weights": "[[2,-1],[2,-3]]",
-                "bias": "[-1,-1]"
+                "weights": "[[-4,-3],[4,3]]",
+                "bias": "[-2,5]"
             },
             {
                 "type": "function",
-                "func": "relu"
+                "func": "tanh"
             },
             {
                 "type": "linear",
-                "weights": "[[1,1],[2,-2]]",
-                "bias": "[2,0]"
+                "weights": "[[-3,-2],[2,3]]",
+                "bias": "[1,2]"
             }
         ]
     }

@@ -1,8 +1,6 @@
 from solver.optimize_impl import OptimizeImpl
 from solver.sprt_impl import SPRTImpl
 from solver.deepcegar_impl import DeepCegarImpl
-from solver.newsol_impl import EmptyImpl
-
 
 class Optimize():
     def solve(self, model, assertion, display=None):
@@ -23,14 +21,12 @@ class SPRT():
 
 
 class DeepCegar():
-    def __init__(self, max_ref):
+    def __init__(self, has_ref, max_ref, ref_typ, max_sus):
+        self.has_ref = has_ref
         self.max_ref = max_ref
+        self.ref_typ = ref_typ
+        self.max_sus = max_sus
 
     def solve(self, model, assertion, display=None):
-        impl = DeepCegarImpl(self.max_ref)
-        impl.solve(model, assertion, display)
-
-class Empty():
-    def solve(self, model, assertion, display=None):
-        impl = EmptyImpl()
-        impl.solve(model, assertion, display)
+        impl = DeepCegarImpl(self.has_ref, self.max_ref, self.ref_typ, self.max_sus)
+        return impl.solve(model, assertion, display)

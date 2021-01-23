@@ -23,7 +23,7 @@ class Model:
         return output
 
 
-    def apply(self, x, y0=None):
+    def apply(self, x):
         if self.layers == None:
             return self.__apply_ptmodel(x)
 
@@ -41,10 +41,7 @@ class Model:
         for layer in self.layers:
             layer.reset()
 
-        if y0 == None:
-            return output
-        else:
-            return output[0, y0]
+        return output
 
 
     def forward(self, x_poly, idx, lst_poly):
@@ -53,6 +50,7 @@ class Model:
             raise NameError('Not support yet!')
 
         output = x_poly # no need for recurrent yet
+
         for i in range(len(self.layers)):
             if i == idx:
                 layer = self.layers[i]
