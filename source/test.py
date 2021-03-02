@@ -1,5 +1,13 @@
 import json
+import ast
+import sys
+from os import path
+sys.path.append(path.abspath("../eran/tf_verify"))
+sys.path.insert(0, path.abspath("../eran/ELINA/python_interface/"))
+sys.path.insert(0, path.abspath("../eran/deepg/code/"))
 
+
+import krelu
 from solver.deepcegar_impl import Poly
 from json_parser import parse
 from sklearn import svm
@@ -9,6 +17,7 @@ from utils import *
 from pathlib import Path
 from assertion.lib_functions import d2
 import matplotlib.pyplot as plt
+import numpy as np
 
 def add_assertion(spec):
     assertion = dict()
@@ -80,7 +89,8 @@ def printPlotLine(x0, const, model, layer_idx, lst_poly):
         input_x[i] = x
         
     y0 = model.apply(x0)
-    label = [y0.argmax() == y.argmax() for y in generate_y]
+    #label = [y0.argmax() == y.argmax() for y in generate_y]
+    label = [y[0] <= 4 for y in generate_y]
     label = np.array(label, dtype=int)
     plot(input_x, label, const, False)
 
@@ -134,9 +144,9 @@ def generate_sample(no_sp, model, const):
         last = (-intercept - np.dot(coef[mask], x))/coef[x_idx]
         if last > model.lower[x_idx] and last < model.upper[x_idx]:
             x = np.insert(x, x_idx, last)
-            #x = np.around(x, 4)
+            x = np.around(x, 4)
             sample[idx] = x
-            y_sample.append(model.apply(x))
+            y_sample.append(model.apply(x)[0])
             idx += 1
     #sample *= 100
     return sample, np.array(y_sample)
@@ -162,26 +172,31 @@ def generate_const(x0, model, layer_idx, lst_poly):
     
     for i in range(n):
         x = generate_x(size, new_model.lower, new_model.upper)
-        #x = np.around(x, 4)
+        x = np.around(x, 4)
         y = new_model.apply(x)
         generate_y[i] = y
         input_x[i] = x
         
     y0 = model.apply(x0)
-    label = [y0.argmax() == y.argmax() for y in generate_y]
+    #label = [y0.argmax() == y.argmax() for y in generate_y]
+    label = [y[0] <= 4 for y in generate_y]
     label = np.array(label, dtype=int)
-    #input_x *= 100
     
     clf = svm.SVC(kernel="linear", C=1000)
-    clf.fit(input_x, label)
+    #clf.fit(input_x, label)
+    new_input = np.array(list(map(lambda x: x[0], input_x))).reshape(-1, 1)
+    clf.fit(new_input, label)
+    
     const = np.concatenate((clf.coef_[0], clf.intercept_))
-    print("score:", clf.score(input_x, label))
+    const = np.insert(const, 1, 0)
+
+    #print("score:", clf.score(input_x, label))
     plot(input_x, label, const)
     norm(const)
     print("const:", const)
     #prove(x0, layer_idx + 1, const, model, lst_poly)
-    if True:
-        return const
+    #if True:
+       #return const
     index = 0
     
     while True:
@@ -191,16 +206,16 @@ def generate_const(x0, model, layer_idx, lst_poly):
             print("const:", const)
         #clf = svm.SVC(kernel="linear", C=1e10)
         sample, y_sample = generate_sample(10, new_model, const)
-        new_label = np.array([y0.argmax() == y.argmax() for y in y_sample], dtype=int)
+        #new_label = np.array([y0.argmax() == y.argmax() for y in y_sample], dtype=int)
+        new_label = np.array([y[0] <= 4 for y in y_sample], dtype=int)
         input_x = np.concatenate((input_x, sample))
         label = np.concatenate((label, new_label))
         clf.fit(input_x, label)
         new_const = norm(np.concatenate((clf.coef_[0], clf.intercept_)))
         #print(np.concatenate((clf.coef_[0], clf.intercept_)))
-        if d2(new_const, const) < 1e-6:
+        if d2(new_const, const) < 1e-5:
             break
         const = new_const
-
 
         
     #plot(input_x, label, clf)
@@ -250,21 +265,28 @@ def getConstraints(lst_poly, index, start, end):
         upper = [dot(pre_X, u) for u in lst_poly[idx].le]
         P += [bound for x, l, u in zip(X, lower, upper) for bound in [x >=l, x <= u]]
         pre_X = X + [1]
+
+    if start == end:
+        X = pre_X[0:-1]
+    
     return And(P), index, X
 
 def prove(x0, idx_ly, const, model, lst_poly):
     s = Solver()
 
     P1, index, X = getConstraints(lst_poly, 1, 0, idx_ly + 1)
+    x3 , x4, x5 , x6 = Real('x3'), Real('x4'), Real('x5'), Real('x6')
+    P1 = And(P1.children() +[2*x5 + 2*x6 - x3 - x4 <= 2, x3 + x4 <= 2, x3 - x4 <= 2, x4 - x3 <= 2, -x3 - x4<= 2])
     P2, index, y = getConstraints(lst_poly, index, idx_ly + 1, len(lst_poly))
-    #print(P1)
-    #print(P2)
-
+    print(P1)
+    print(P2)
+    
     y0_arg = np.argmax(model.apply(np.array([x0])), axis=1)[0]
-    Property = And([ForAll(X, y[y0_arg] > y[i]) for i in range(len(y)) if i != y0_arg])
-    #print(Property)
+    #Property = And([ForAll(X, y[y0_arg] > y[i]) for i in range(len(y)) if i != y0_arg])
+    Property = ForAll(X, y[0] <= 4)
+    print(Property)
 
-    f = dot(X + [1], const) > 0 
+    f = dot(X + [1], const) >= 0 
     #print(f)
 
     valid_prove(And(P1, P2), Property, "P1 and P2 => Property")
@@ -284,7 +306,7 @@ def checkSum(model, x0):
     
     for i in range(n):
         x = generate_x(size, model.lower, model.upper)
-        x = np.around(x, 5)
+        x = np.around(x, 4)
         y = model.apply(x)
         generate_y[i] = y
         input_x[i] = x
@@ -295,8 +317,9 @@ def checkSum(model, x0):
     print("Sum of label:", sum(label))
 
 def main():
-    base_path = Path(__file__).parent
-    model_path = base_path / "./deeppoly_model/spec_ReLu.json"
+    base_path = Path(__file__).parent.parent
+    #model_path = base_path / "source/deeppoly_model/spec_ReLu2.json"
+    model_path = base_path / "benchmark/cegar/nnet/mnist_relu_3_10/spec.json"
     with open(model_path, 'r') as f:
         spec = json.load(f)
 
@@ -305,24 +328,27 @@ def main():
     
     model, assertion, solver, display = parse(spec)
     x0 = np.array([0,0])
+
+    PathX = base_path / "benchmark/cegar/data/mnist_fc/data5.txt"
+    x0 = np.array(ast.literal_eval(read(PathX)))
+
     print("Label of x0: {}".format(model.apply(np.array([x0])).argmax(axis=1)[0]))
     
     print("Sample after relu layer")
     #Sample after relu layer 
     lst_poly = buildDeepPoly(model)
+    #lst_poly.pop()
+    idx_ly = 2
 
-    idx_ly = 3 
-
-    const = generate_const(x0, model, idx_ly, lst_poly)
-    #const = np.array([-1, 2.97250515, 6])
+    #const = generate_const(x0, model, idx_ly, lst_poly)
+    #const = np.around(const, 3)
+    #print(const)
+    #const = np.array([-1, -1.2864e-04, 3.9988])
     #printPlotLine(x0, const, model, idx_ly, lst_poly)
-    re = prove(x0, idx_ly + 1, const, model, lst_poly)
-    #print("f: x >", -const[-1]/const[0])
+    #re = prove(x0, idx_ly + 1, const, model, lst_poly)
     #checkSum(model, x0)
+
     
-
-
-
 
     
 
