@@ -123,6 +123,9 @@ class Function(Layer):
             return False
         else:
             return True
+    
+    def to_tf(self):
+        return func2tf(self.func), None
 
 
 class Linear(Layer):
@@ -159,6 +162,10 @@ class Linear(Layer):
 
     def is_poly_exact(self):
         return True
+    
+    def to_tf(self):
+        wei_bias = str(self.weights.transpose(1, 0).tolist()) + '\n' + str(self.bias.flatten().tolist()) + '\n'
+        return func2tf(self.func), wei_bias
 
 
 class BasicRNN(Layer):

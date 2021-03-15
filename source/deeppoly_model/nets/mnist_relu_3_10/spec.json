@@ -1,0 +1,40 @@
+{
+  "model": {
+    "shape": "(1,784)",
+    "bounds" : "[(0,1)]",
+    "layers": [
+      {
+        "type": "linear",
+        "weights": "benchmark/cegar/nnet/mnist_relu_3_10/weights/w1.txt",
+        "bias": "benchmark/cegar/nnet/mnist_relu_3_10/bias/b1.txt"
+      },
+      {
+        "type": "function",
+        "func": "relu"
+      },
+      {
+        "type": "linear",
+        "weights": "benchmark/cegar/nnet/mnist_relu_3_10/weights/w2.txt",
+        "bias": "benchmark/cegar/nnet/mnist_relu_3_10/bias/b2.txt"
+      },
+      {
+        "type": "function",
+        "func": "relu"
+      },
+      {
+        "type": "linear",
+        "weights": "benchmark/cegar/nnet/mnist_relu_3_10/weights/w3.txt",
+        "bias": "benchmark/cegar/nnet/mnist_relu_3_10/bias/b3.txt"
+      },
+      {
+        "type": "function",
+        "func": "relu"
+      },
+      {
+        "type": "linear",
+        "weights": "benchmark/cegar/nnet/mnist_relu_3_10/weights/w4.txt",
+        "bias": "benchmark/cegar/nnet/mnist_relu_3_10/bias/b4.txt"
+      }
+    ]
+  }
+}

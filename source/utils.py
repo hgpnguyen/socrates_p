@@ -47,6 +47,18 @@ def get_func(name, params):
     else:
         raise NameError('Not support yet!')
 
+def func2tf(func):
+    if func is None:
+        return 'Affine'
+    if func.__name__ == 'relu':
+        return 'ReLU'
+    elif func.__name__ == 'sigmoid':
+        return 'Sigmoid'
+    elif func.__name__ == 'tanh':
+        return 'Tanh'
+    else:
+         raise NameError('Not support func2tf of ' + func.__name__ + ' yet!')
+
 def index1d(channel, stride, kshape, xshape):
     k_l = kshape
     x_l = xshape
@@ -129,4 +141,10 @@ def generate_x(size, lower, upper):
     x = np.random.rand(size)
     x = (upper - lower) * x + lower
 
+    return x
+
+def apply_model(model, input_x):
+    x = input_x
+    for layer in model.layers:
+        x = layer.apply(x)
     return x
