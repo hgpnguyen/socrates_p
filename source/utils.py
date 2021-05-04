@@ -1,4 +1,6 @@
 import autograd.numpy as np
+import ast
+import csv
 import os
 
 from functools import partial, update_wrapper
@@ -143,8 +145,26 @@ def generate_x(size, lower, upper):
 
     return x
 
-def apply_model(model, input_x):
+def apply_model(layers, input_x):
     x = input_x
-    for layer in model.layers:
+    for layer in layers:
         x = layer.apply(x)
     return x
+
+def getFailedDeepPoly(failedfile, x_path, y_path):
+    csvfile = open(failedfile, 'r')
+    list_file_raw = csv.reader(csvfile, delimiter=',')
+    list_file, names = [], []
+    x_final, y_final = np.array([]).reshape(0,784), np.array([])
+    for test in list_file_raw:
+        list_file.append((test[0], ast.literal_eval(test[1])))
+    for idx, tests in list_file:     
+        pathX = x_path + str(idx) + ".txt"
+        pathY = None if y_path is None else y_path + str(idx) + ".txt"
+        x0s = np.array(ast.literal_eval(read(pathX)))
+        y0s = None if y_path is None else np.array(ast.literal_eval(read(pathY)))
+        x_final = np.vstack((x_final, x0s[tests, :]))
+        y_final = np.concatenate((y_final, y0s[tests]))
+        names = names + [str(idx) + '_' + str(i) for i in tests]
+    print(x_final.shape, y_final.shape)
+    return names, x_final, y_final

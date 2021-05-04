@@ -6,7 +6,7 @@ sys.path.append(path.abspath("../eran/tf_verify"))
 sys.path.insert(0, path.abspath("../eran/ELINA/python_interface/"))
 sys.path.insert(0, path.abspath("../eran/deepg/code/"))
 
-
+import csv
 import krelu
 from solver.deepcegar_impl import Poly
 from json_parser import parse, parse_solver
@@ -16,10 +16,13 @@ from model.lib_models import Model
 from utils import *
 from pathlib import Path
 from assertion.lib_functions import d2
-from eran_test import checkRefinePoly
+from eran_test import checkRefinePoly, getModel
+from run_refinepoly import refinepoly_run
 import matplotlib.pyplot as plt
 import numpy as np
 import time
+
+eps = 0.01
 
 def add_assertion(spec):
     assertion = dict()
@@ -133,7 +136,7 @@ def getDeepPoly(model, x0, eps):
     return lst_poly
 
 
-def generate_sample(no_sp, model, const):
+def generate_sample(no_sp, middle_x, model, neuron_lst, const):
     idx = 0
     size = model.shape[1]
                   
@@ -144,8 +147,10 @@ def generate_sample(no_sp, model, const):
             break
     mask = np.ones(size, dtype=bool)
     mask[x_idx] = False
+    #print(const, len(const))
     coef = np.array(const[:-1])
     intercept = const[-1]
+    #print(coef, len(coef))
 
     x = np.random.rand(2 * no_sp, size - 1)
     x = (model.upper[mask] - model.lower[mask]) * x + model.lower[mask]
@@ -155,15 +160,21 @@ def generate_sample(no_sp, model, const):
     x = x[filter_]
     x = np.around(x, 4)
     x = np.unique(x, axis=0)
-    y_sample = apply_model(model, x)
+    template = np.repeat(middle_x, x.shape[0], axis=0)
+    template[:, neuron_lst] = x[:, neuron_lst]
+    x = template
+    y_sample = apply_model(model.layers, x)
     slice_ = no_sp if no_sp <= x.shape[0] else x.shape[0]
-    #sample *= 100
-    return x[:slice_], y_sample[:slice_]
+    return x[:slice_, neuron_lst], y_sample[:slice_]
 
-def active_learning(y0, model, clf, data, time_limit):
+def getClf():
+    return svm.LinearSVC(loss='hinge', C=1000, tol=1e-6)
+
+def active_learning(middle_x, model, const, neuron_lst, data, time_limit):
     index = 0
+    y0 = model.apply(middle_x)
     input_x, label = data
-    const = np.concatenate((clf.coef_[0], clf.intercept_))
+    clf = getClf()
     start = time.perf_counter()
     while time.perf_counter() - start < time_limit:
         index += 1
@@ -171,20 +182,22 @@ def active_learning(y0, model, clf, data, time_limit):
             print("score:", clf.score(input_x, label))
             print("const:", const)
 
-        sample, y_sample = generate_sample(100, model, const)
+        sample, y_sample = generate_sample(100, middle_x, model, neuron_lst, const)
         new_label = np.array([y0.argmax() == y.argmax() for y in y_sample], dtype=int)
         #new_label = np.array([y[0] <= 4 for y in y_sample], dtype=int)
         input_x = np.concatenate((input_x, sample))
         label = np.concatenate((label, new_label))
         clf.fit(input_x, label)
-        new_const = norm(np.concatenate((clf.coef_[0], clf.intercept_)))
+        new_const = np.zeros(len(const)-1)
+        new_const[neuron_lst] = clf.coef_[0]
+        new_const = norm(np.concatenate((new_const, clf.intercept_)))
 
         if d2(new_const, const) < 1e-4:
             break
         const = new_const
     return const
 
-def generate_const(x0, model, layer_idx, lst_poly):
+def generate_const(x0, model, layer_idx, lst_poly, neuron_lst=None):
     if layer_idx == -1 or layer_idx >= len(model.layers):
         new_model = model
     else:       
@@ -196,35 +209,39 @@ def generate_const(x0, model, layer_idx, lst_poly):
 
 
     size = np.prod(new_model.shape)
-    
+    if neuron_lst is None:
+        neuron_lst = list(range(size))
+
     n = 15000
-    generate_y = np.zeros((n, size))
-    input_x = np.random.rand(n, size)
-    input_x = (new_model.upper - new_model.lower) * input_x + new_model.lower
+
+    middle_x = apply_model(model.layers[:layer_idx+1], x0)
+    input_x = np.repeat(middle_x, n, axis=0)
     input_x = np.around(input_x, 4)
-    generate_y = apply_model(new_model, input_x)
+    rand_int = np.random.rand(n, len(neuron_lst))
+    rand_int = (new_model.upper[neuron_lst] - new_model.lower[neuron_lst]) * rand_int + new_model.lower[neuron_lst]
+    rand_int = np.around(rand_int, 4)
+    input_x[:, neuron_lst] = rand_int
+    generate_y = apply_model(new_model.layers, input_x)
         
     y0 = model.apply(x0)
     label = [y0.argmax() == y.argmax() for y in generate_y]
     #label = [y[0] <= 4 for y in generate_y]
     label = np.array(label, dtype=int)
     
-    clf = svm.LinearSVC(C=100, tol=1e-5)
-    clf.fit(input_x, label)
+    clf = getClf()
+    clf.fit(rand_int, label)
     #new_input = np.array(list(map(lambda x: x[0], input_x))).reshape(-1, 1)
     #clf.fit(new_input, label)
     
     #print("Size:", clg.coef_.shape())
-    const = np.concatenate((clf.coef_[0], clf.intercept_))
-    #const = np.insert(const, 1, 0)
-
-    #print("score:", clf.score(input_x, label))
+    const = np.zeros(size)
+    const[neuron_lst] = clf.coef_[0]
+    const = np.concatenate((const, clf.intercept_))
     #plot(input_x, label, const)
     norm(const)
-    #print("const:", const)
-    #prove(x0, layer_idx + 1, const, model, lst_poly)
+
     
-    const = active_learning(y0, new_model, clf, (input_x, label), 10)
+    const = active_learning(middle_x, new_model, const, neuron_lst, (rand_int, label), 3)
     return const
 
 def dot(a, b):
@@ -278,7 +295,7 @@ def getConstraints(lst_poly, index, start, end):
 
 def prove(x0, idx_ly, const, model, lst_poly):
     s = Solver()
-
+    s.set("timeout", 1000)
     P2, X, y = getConstraints(lst_poly, 0, idx_ly + 1, len(lst_poly))
 
     #print(P2)
@@ -312,13 +329,79 @@ def checkSum(model, x0):
     label = np.array(label, dtype=int)
     print("Sum of label:", sum(label))
 
-def sort_layer(lst_poly):
-    lst_idx = range(len(lst_poly)-2)
-    num_neurons_lst = [len(i.lw) for i in lst_poly[1:len(lst_poly)-1]]
+def sort_layer(layers, lst_poly):
+    lst_idx, num_neurons_lst = [], []
+    for idx in range(len(layers)-1):
+        if not layers[idx].is_poly_exact():
+            lst_idx.append(idx)
+            num_neurons_lst.append(len(lst_poly[idx+1].lw))
     lst_idx = list(zip(lst_idx, num_neurons_lst))
     lst_idx.reverse()
-    lst_idx.sort(reverse=True, key= lambda x:x[1])
+    lst_idx.sort(reverse=False, key= lambda x:x[1])
     return [x[0] for x in lst_idx]
+
+def sort_neuron(model, lst_poly, x0, idx_layer):
+    assert len(lst_poly) == len(model.layers) + 1
+    if model.layers[idx_layer].is_poly_exact():
+        return None
+    y0 = np.argmax(model.apply(x0), axis=1)[0]
+    poly_out = lst_poly[-1]
+    no_neurons = len(poly_out.lw)
+    check_false = False
+    #get lst_ge
+    for y in range(no_neurons):
+        if y != y0 and poly_out.lw[y0] <= poly_out.up[y]:
+            poly_res = Poly()
+
+            poly_res.lw = np.zeros(1)
+            poly_res.up = np.zeros(1)
+
+            poly_res.le = np.zeros([1, no_neurons + 1])
+            poly_res.ge = np.zeros([1, no_neurons + 1])
+
+            poly_res.ge[0,y0] = 1
+            poly_res.ge[0,y] = -1
+
+            lst_le, lst_ge = poly_res.back_substitute(lst_poly, True)
+
+            assert len(lst_ge) == len(lst_poly)
+
+            if poly_res.lw[0] <= 0:
+                check_false = True
+                break
+    #assert checK_false If violate mean that the model is robust
+    if not check_false:
+        return None
+
+    poly_i = lst_poly[idx_layer]
+    ge_i = lst_ge[idx_layer]
+    layer = model.layers[idx_layer]
+    func = layer.func
+
+    sum_impact = 0
+    impact_lst = []
+
+    for ref_idx in range(len(poly_i.lw)):
+        lw = poly_i.lw[ref_idx]
+        up = poly_i.up[ref_idx]
+        cf = ge_i[ref_idx]
+
+        impact = 0
+        if ((func == sigmoid or func == tanh) and lw < up) \
+            or (func == relu and lw < 0 and up > 0):
+            impact = max(abs(cf * lw), abs(cf * up))
+            sum_impact = sum_impact + impact
+        impact_lst.append(impact)
+
+    if sum_impact > 0:
+        impact_lst = list(map(lambda x: x/sum_impact, impact_lst))
+        sort_lst = list(zip(list(range(len(impact_lst))), impact_lst))
+        sort_lst.sort(reverse=True, key=lambda x: x[1])
+        return [x[0] for x in sort_lst]
+    else:
+        print("All exact")
+        return None
+
 
 def save_tf_model(path, model, idx):
     ops, wei_biass = [], []
@@ -336,7 +419,7 @@ def save_tf_model(path, model, idx):
             ops.append(op)
             wei_biass.append(wei_bias)
 
-    with open(path / 'temp.tf', 'w') as f:
+    with open(path + 'temp.tf', 'w') as f:
         for op, wei_bias in zip(ops, wei_biass):
             f.write(op+'\n')
             f.write(wei_bias)
@@ -354,93 +437,160 @@ def testCegar(model, x0):
 
 def refineF(x0, idx_ly, const, model, lst_poly, objVal):
     ori = const[-1]
-    const[-1] -= objVal - 0.01
+    const[-1] += -(objVal - 0.01)
     re = prove(x0, idx_ly + 1, const, model, lst_poly)
-    while not re and const[-1] < ori + objVal:
-        const[-1] += objVal/10
-        re = prove(x0, idx_ly + 1, const, model, lst_poly)
+    if objVal <= 0:
+        return re
+    #while not re and const[-1] < ori:
+    #    const[-1] += objVal/10
+    #    re = prove(x0, idx_ly + 1, const, model, lst_poly)
     return re
 
-eps = 0.01
+def newApproach(model, x0, models_path):
+    lst_poly = getDeepPoly(model, x0, eps) #May need to get it directly from solver
+    print(sort_layer(model.layers, lst_poly))
+    success_lst = []
 
-def main():
-    base_path = Path(__file__).parent.parent
-    models_path = base_path / "source/deeppoly_model/"
-    #model_path = models_path / "spec_Cegar.json"
-    model_path = base_path / "benchmark/cegar/nnet/mnist_relu_3_10/spec.json"
-    with open(model_path, 'r') as f:
-        spec = json.load(f)
+    for idx_ly in sort_layer(model.layers, lst_poly):
+        start_lst = 0
+        neuron_lst = sort_neuron(model, lst_poly, x0, idx_ly)
+        if neuron_lst is None:
+            neuron_lst = list(range(len(lst_poly[idx_ly+1].lw)))
+            start_lst = len(neuron_lst) - 1
 
-    add_assertion(spec)
-    add_solver(spec)
-    
-    model, assertion, solver, display = parse(spec)
-    #assertion['x0'] = '[0,0]'
-    #x0 = np.array([0,0])
-    list_potential, unknow, find_exp = [], [], []
-    for idx_data in [6]:
-        find = True
-        data_file = "data" + str(idx_data) + ".txt"
-        PathX = base_path / "benchmark/cegar/data/mnist_fc" / data_file
-        assertion['x0'] = PathX
-        x0 = np.array(ast.literal_eval(read(PathX)))
-        #print("Label of x0: {}".format(model.apply(np.array([x0])).argmax(axis=1)[0]))
-
-        res = solver.solve(model, assertion)
-        if res == 1 or res == 2:
-            print("DeepPoly can prove this model")
-            continue
-        else:
-            print("DeepPoly can't prove this model:", idx_data)
-            res = testCegar(model, PathX)
-        
-        if res == 1:
-            list_potential.append(idx_data)
-        elif res == 2:
-            continue
-        else:
-            print("Cegar also can't prove this")
-            unknow.append(idx_data)
-
-        lst_poly = getDeepPoly(model, x0, eps) #May need to get it directly from solver
-        #lst_poly.pop()
-        print(sort_layer(lst_poly))
-        for idx_ly in sort_layer(lst_poly):
-            #idx_ly = 2
+        save_tf_model(models_path + "temp/", model, idx_ly)
+        counter, var_list, refinepoly_model = getModel(models_path + "temp/temp.tf", lst_poly[0].lw, lst_poly[0].up) 
+        for i in range(start_lst, len(neuron_lst)):
             try:
-                const = generate_const(x0, model, idx_ly, lst_poly)
+                const = generate_const(x0, model, idx_ly, lst_poly, neuron_lst[:i+1])
                 const = np.around(const, 3)
             except ValueError as err:
                 continue
-
             #const = np.ones(11)
-            print(const)
+            print("List", neuron_lst)
+            print("Const", const)
 
-            save_tf_model(models_path / "nets/", model, idx_ly)
-            res, objVal = checkRefinePoly(models_path / "nets/temp.tf", lst_poly[0].lw, lst_poly[0].up, const, True)
+
+            res, objVal = checkRefinePoly(counter, var_list, refinepoly_model, const, True)
             if res:
                 print("Prove P1 => f")
             else:
                 print("Not Prove P1 => f")
-        
-            #printPlotLine(x0, const, model, idx_ly, lst_poly)
+            
+                #printPlotLine(x0, const, model, idx_ly, lst_poly)
             re = prove(x0, idx_ly + 1, const, model, lst_poly)
             refine = False
             #checkSum(model, x0)
             #test_apply(model)
-            if res and not re:
+            if (res and not re) or (not res and re):
                 re = refineF(x0, idx_ly, const, model, lst_poly, objVal)
                 refine = True
             if not re:
                 print("Not prove P2 and f => Property")
             if res and re:
-                print("Find the example:", PathX)
-                print("Layer use:", idx_ly)
-                find_exp.append((PathX, idx_ly, refine))
-                
-    print("potential:", list_potential)
-    print("Unknow:", unknow)
-    print("Example Find:", find_exp)
+                success_lst.append((idx_ly, i+1, refine))
+                return success_lst
+    return success_lst
+
+def mnist_challenge(model_path, _range, x_path, y_path=None):
+    #list_file = []
+    #with open("deeppoly_failed.csv", 'r') as csvfile: 
+    #    list_file_raw = csv.reader(csvfile, delimiter='\t')
+    #    for test in list_file_raw:
+    #        list_file.append((test[0], ast.literal_eval(test[1])))
+    
+    model_name = str(model_path).split('/')[-2]
+
+    with open(model_path, 'r') as f:
+        spec = json.load(f)
+
+    add_assertion(spec)
+    add_solver(spec)
+    model, assertion, solver, display = parse(spec)
+    list_potential2, unknow2, find_exp2 = [], [], []
+    index = 0
+    for i in _range:
+    #for i in list_file:
+        testfileName = i
+        pathX = x_path + str(testfileName) + ".txt" #i -> i[0]
+        pathY = None if y_path is None else y_path + str(testfileName) + ".txt" #i -> i[0]
+        x0s = np.array(ast.literal_eval(read(pathX)))
+        y0s = None if y_path is None else np.array(ast.literal_eval(read(pathY)))
+        x0s = x0s if len(x0s.shape) == 2 else np.array([x0s])
+        list_potential, unknow, find_exp, csv_result = [], [], [], []
+        for j in range(x0s.shape[0]):
+        #for j in i[1]:
+            #print('Index:', index)
+            #index += 1
+            x0 = x0s[j]
+            assertion['x0'] = str(x0.tolist())
+            output_x0 = model.apply(x0)
+            lbl_x0 = np.argmax(output_x0, axis=1)[0] 
+            y0 = y0s[j] if y0s is not None else lbl_x0
+            if lbl_x0 != y0:
+                print("Skip")
+                continue
+            start = time.time()
+            #res = solver.solve(model, assertion)
+            res = refinepoly_run(np.array([x0]), np.array([y0]))
+            print("DeepPoly time:", time.time()-start)
+            if res == 1 or res == 2:
+                print("DeepPoly can prove this model")
+                continue
+            else:
+                print("DeepPoly can't prove this model:", j)
+                list_potential.append(j)
+                #res = testCegar(model, str(x0.tolist()))
+            #if res == 1:
+            #    list_potential.append(j)
+            #elif res == 2:
+            #    continue
+            #else:
+            #    print("Cegar also can't prove this")
+            #    unknow.append(j)
+            start = time.time()
+            success_lst = newApproach(model, x0, '')
+            if success_lst:
+                print("Find example:", j)
+                find_exp.append((j, success_lst))
+                csv_result.append([str(testfileName) + '_' + str(j), time.time()-start, success_lst])
+    
+        if list_potential:
+            list_potential2.append([testfileName,list_potential])
+            with open('result_newapproach/{}_refinepoly_failed.csv'.format(model_name), 'a') as f:
+                writer = csv.writer(f)
+                writer.writerow([testfileName,list_potential])
+            
+        #unknow2.append((i,unknow))
+        find_exp2.append((testfileName, find_exp))
+        with open('result_newapproach/{}_approach_result.csv'.format(model_name), 'a') as f:
+            writer = csv.writer(f)
+            writer.writerows(csv_result)
+
+    print("potential:", list_potential2)
+    #print("Unknow:", unknow2)
+    print("Example Find:", find_exp2)
+
+
+
+def main():
+    base_path = Path(__file__).parent.parent
+    models_path = base_path / "source/deeppoly_model/"
+    #model_path = models_path / "spec_Cegar.json"
+    model_path = base_path / "benchmark/cegar/nnet/mnist_relu_4_20/spec.json"
+    #[6, 24, 65, 96]
+    #PathX = base_path / "benchmark/cegar/data/mnist_fc/data"
+    PathX = base_path / "benchmark/mnist_challenge/x_y/x"
+    PathY = base_path / "benchmark/mnist_challenge/x_y/y"
+
+    mnist_challenge(model_path, list(range(0,1)), str(PathX), str(PathY))
+
+    #list_file = []
+    #with open("deeppoly_failed.csv", 'r') as csvfile: 
+    #    list_file_raw = csv.reader(csvfile, delimiter='\t')
+    #    for test in list_file_raw:
+    #        list_file.append((test[0], ast.literal_eval(test[1])))
+   
 
     
 

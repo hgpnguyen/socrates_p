@@ -422,7 +422,6 @@ class DeepCegarImpl():
 
         return lst_poly1, lst_poly2
 
-
     def solve(self, model, assertion, display=None):
         # only solve for local robustness
         return self.__solve_local_robustness(model, assertion, display)

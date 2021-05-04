@@ -45,18 +45,24 @@ def getAnalyzer(netname, spec_lb, spec_ub):
     analyzer = Analyzer(execute_list, nn, domain, config.timeout_lp, config.timeout_milp, None, config.use_default_heuristic, -1, -1)
     return analyzer
 
-def getModel(analyer):
-    element, nlb, nub = analyer.get_abstract0()
+def getModel(netname, specLB, specUB):
+    config.complete = True
+    config.refine_neurons = True
+    config.sparse_n = 12
+    config.timeout_milp = 10
+    config.timeout_lp = 10
+    analyzer = getAnalyzer(netname, specLB, specUB)
+    element, nlb, nub = analyzer.get_abstract0()
     output_size = 0
-    output_size = analyer.ir_list[-1].output_length
-    analyer.nn.ffn_counter = 0
-    analyer.nn.conv_counter = 0
-    analyer.nn.pool_counter = 0
-    analyer.nn.concat_counter = 0
-    analyer.nn.tile_counter = 0
-    analyer.nn.residual_counter = 0
-    analyer.nn.activation_counter = 0
-    counter, var_list, model = create_model(analyer.nn, analyer.nn.specLB, analyer.nn.specUB, nlb, nub, analyer.relu_groups, analyer.nn.numlayer, config.complete==True)
+    output_size = analyzer.ir_list[-1].output_length
+    analyzer.nn.ffn_counter = 0
+    analyzer.nn.conv_counter = 0
+    analyzer.nn.pool_counter = 0
+    analyzer.nn.concat_counter = 0
+    analyzer.nn.tile_counter = 0
+    analyzer.nn.residual_counter = 0
+    analyzer.nn.activation_counter = 0
+    counter, var_list, model = create_model(analyzer.nn, analyzer.nn.specLB, analyzer.nn.specUB, nlb, nub, analyzer.relu_groups, analyzer.nn.numlayer, config.complete==True)
     if config.complete==True:
         model.setParam(GRB.Param.TimeLimit,config.timeout_milp)
     else:
@@ -65,12 +71,7 @@ def getModel(analyer):
     return counter, var_list, model
 
 
-def checkRefinePoly(netname, specLB, specUB, invariant, printModel=False):
-    config.complete = True
-    config.refine_neurons = True
-    config.sparse_n = 15
-    analyzer = getAnalyzer(netname, specLB, specUB)
-    counter, var_list, model = getModel(analyzer)
+def checkRefinePoly(counter, var_list, model, invariant, printModel=False):
     num_var = len(var_list)
     output_size = num_var - counter
     assert output_size + 1 == len(invariant), "The number of coeffecient don't match number of neuron"
@@ -82,7 +83,7 @@ def checkRefinePoly(netname, specLB, specUB, invariant, printModel=False):
     model.setObjective(obj, GRB.MINIMIZE)
     model.optimize()
     if printModel:
-        model.write("model.lp")
+        #model.write("model.lp")
         print("objVal:", model.objVal)
     return model.objVal >= 0, model.objVal
 
