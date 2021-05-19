@@ -46,9 +46,9 @@ def getAnalyzer(netname, spec_lb, spec_ub):
     return analyzer
 
 def getModel(netname, specLB, specUB):
-    config.complete = True
+    config.complete = False
     config.refine_neurons = True
-    config.sparse_n = 12
+    config.sparse_n = 2
     config.timeout_milp = 10
     config.timeout_lp = 10
     analyzer = getAnalyzer(netname, specLB, specUB)

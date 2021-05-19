@@ -178,47 +178,7 @@ def denormalize(image, means, stds, dataset):
             image[i] = tmp[i]
 
 
-def model_predict(base, input):
-    if is_onnx:
-        pred = base.run(input)
-    else:
-        pred = base.run(base.graph.get_operation_by_name(model.op.name), {base.graph.get_operations()[0].name + ':0': input})
-    return pred
 
-
-def estimate_grads(specLB, specUB, dim_samples=3):
-    specLB = np.array(specLB, dtype=np.float32)
-    specUB = np.array(specUB, dtype=np.float32)
-    inputs = [((dim_samples - i) * specLB + i * specUB) / dim_samples for i in range(dim_samples + 1)]
-    diffs = np.zeros(len(specLB))
-
-    # refactor this out of this method
-    if is_onnx:
-        runnable = rt.prepare(model, 'CPU')
-    elif sess is None:
-        runnable = tf.Session()
-    else:
-        runnable = sess
-
-    for sample in range(dim_samples + 1):
-        pred = model_predict(runnable, inputs[sample])
-
-        for index in range(len(specLB)):
-            if sample < dim_samples:
-                l_input = [m if i != index else u for i, m, u in zip(range(len(specLB)), inputs[sample], inputs[sample+1])]
-                l_input = np.array(l_input, dtype=np.float32)
-                l_i_pred = model_predict(runnable, l_input)
-            else:
-                l_i_pred = pred
-            if sample > 0:
-                u_input = [m if i != index else l for i, m, l in zip(range(len(specLB)), inputs[sample], inputs[sample-1])]
-                u_input = np.array(u_input, dtype=np.float32)
-                u_i_pred = model_predict(runnable, u_input)
-            else:
-                u_i_pred = pred
-            diff = np.sum([abs(li - m) + abs(ui - m) for li, m, ui in zip(l_i_pred, pred, u_i_pred)])
-            diffs[index] += diff
-    return diffs / dim_samples
 
 
 
@@ -249,107 +209,78 @@ def init_domain(d):
     else:
         return d
 
-config.netname = 'benchmark/cegar/nnet/mnist_relu_3_20/original/mnist_relu_3_20.tf'
-config.dataset = 'mnist'
-config.domain = 'refinepoly'
-config.epsilon = 0.01
-config.use_milp = True
-config.complete = True
-config.refine_neurons = True
-config.sparse_n = 12
-config.timeout_lp = 10
-config.timeout_milp = 10
 
-if config.specnumber and not config.input_box and not config.output_constraints:
-    config.input_box = '../data/acasxu/specs/acasxu_prop_' + str(config.specnumber) + '_input_prenormalized.txt'
-    config.output_constraints = '../data/acasxu/specs/acasxu_prop_' + str(config.specnumber) + '_constraints.txt'
 
-assert config.netname, 'a network has to be provided for analysis.'
+
 
 #if len(sys.argv) < 4 or len(sys.argv) > 5:
 #    print('usage: python3.6 netname epsilon domain dataset')
 #    exit(1)
 
-netname = config.netname
-filename, file_extension = os.path.splitext(netname)
 
-is_trained_with_pytorch = file_extension==".pyt"
-is_saved_tf_model = file_extension==".meta"
-is_pb_file = file_extension==".pb"
-is_tensorflow = file_extension== ".tf"
-is_onnx = file_extension == ".onnx"
-assert is_trained_with_pytorch or is_saved_tf_model or is_pb_file or is_tensorflow or is_onnx, "file extension not supported"
-
-epsilon = config.epsilon
 #assert (epsilon >= 0) and (epsilon <= 1), "epsilon can only be between 0 and 1"
-
-zonotope_file = config.zonotope
-zonotope = None
-zonotope_bool = (zonotope_file!=None)
-if zonotope_bool:
-    zonotope = read_zonotope(zonotope_file)
-
-domain = config.domain
-
-if zonotope_bool:
-    assert domain in ['deepzono', 'refinezono'], "domain name can be either deepzono or refinezono"
-elif not config.geometric:
-    assert domain in ['deepzono', 'refinezono', 'deeppoly', 'refinepoly', 'gpupoly', 'refinegpupoly'], "domain name can be either deepzono, refinezono, deeppoly, refinepoly, gpupoly, refinegpupoly"
-
-dataset = config.dataset
-
-if zonotope_bool==False:
-   assert dataset in ['mnist', 'cifar10', 'acasxu', 'fashion'], "only mnist, cifar10, acasxu, and fashion datasets are supported"
-
-constraints = None
-if config.output_constraints:
-    constraints = get_constraints_from_file(config.output_constraints)
 
 mean = 0
 std = 0
 
+netname, epsilon, domain, dataset = None, None, None, None
+
 complete = (config.complete==True)
 
-if(dataset=='acasxu'):
-    print("netname ", netname, " specnumber ", config.specnumber, " domain ", domain, " dataset ", dataset, "args complete ", config.complete, " complete ",complete, " timeout_lp ",config.timeout_lp)
-else:
+means, stds, is_conv = None, None, None
+
+
+
+correctly_classified_images = 0
+verified_images = 0
+
+
+#if dataset:
+#    if config.input_box is None:
+#        tests = get_tests(dataset, config.geometric)
+#    else:
+#        tests = open(config.input_box, 'r').read()
+
+def set_config(netname, eps, dataset="mnist"):
+    config.netname = netname
+    config.dataset = dataset
+    config.domain = 'refinepoly'
+    config.epsilon = eps
+    config.use_milp = True
+    config.complete = False
+    config.refine_neurons = True
+    config.sparse_n = 2
+    config.timeout_lp = 10
+    config.timeout_milp = 10
+    
+def init_model():
+    global netname, epsilon, domain, dataset, means, stds, is_conv
+    netname = config.netname
+    filename, file_extension = os.path.splitext(netname)
+    assert config.netname, 'a network has to be provided for analysis.'
+
+    is_trained_with_pytorch = file_extension==".pyt"
+    is_saved_tf_model = file_extension==".meta"
+    is_pb_file = file_extension==".pb"
+    is_tensorflow = file_extension== ".tf"
+    is_onnx = file_extension == ".onnx"
+    assert is_trained_with_pytorch or is_saved_tf_model or is_pb_file or is_tensorflow or is_onnx, "file extension not supported"
+
+    epsilon = config.epsilon
+    domain = config.domain
+    assert domain in ['deepzono', 'refinezono', 'deeppoly', 'refinepoly', 'gpupoly', 'refinegpupoly'], "domain name can be either deepzono, refinezono, deeppoly, refinepoly, gpupoly, refinegpupoly"
+
+    dataset = config.dataset
+    #assert dataset in ['mnist', 'cifar10', 'acasxu', 'fashion'], "only mnist, cifar10, acasxu, and fashion datasets are supported"
     print("netname ", netname, " epsilon ", epsilon, " domain ", domain, " dataset ", dataset, "args complete ", config.complete, " complete ",complete, " timeout_lp ",config.timeout_lp)
-
-non_layer_operation_types = ['NoOp', 'Assign', 'Const', 'RestoreV2', 'SaveV2', 'PlaceholderWithDefault', 'IsVariableInitialized', 'Placeholder', 'Identity']
-
-sess = None
-if is_saved_tf_model or is_pb_file:
-    netfolder = os.path.dirname(netname)
-
-    tf.logging.set_verbosity(tf.logging.ERROR)
-
-    sess = tf.Session()
-    if is_saved_tf_model:
-        saver = tf.train.import_meta_graph(netname)
-        saver.restore(sess, tf.train.latest_checkpoint(netfolder+'/'))
-    else:
-        with tf.gfile.GFile(netname, "rb") as f:
-            graph_def = tf.GraphDef()
-            graph_def.ParseFromString(f.read())
-            sess.graph.as_default()
-            tf.graph_util.import_graph_def(graph_def, name='')
-    ops = sess.graph.get_operations()
-    last_layer_index = -1
-    while ops[last_layer_index].type in non_layer_operation_types:
-        last_layer_index -= 1
-    model = sess.graph.get_tensor_by_name(ops[last_layer_index].name + ':0')
-
-    eran = ERAN(model, sess)
-
-else:
-    if(zonotope_bool==True):
-        num_pixels = len(zonotope)
-    elif(dataset=='mnist'):
+    if(dataset=='mnist'):
         num_pixels = 784
     elif (dataset=='cifar10'):
         num_pixels = 3072
     elif(dataset=='acasxu'):
         num_pixels = 5
+    else:
+        num_pixels = dataset
     if is_onnx:
         model, is_conv = read_onnx_net(netname)
     else:
@@ -366,39 +297,29 @@ else:
     else:    
         eran = ERAN(model, is_onnx=is_onnx)
 
-if not is_trained_with_pytorch:
-    if dataset == 'mnist' and not config.geometric:
-        means = [0]
-        stds = [1]
-    elif dataset == 'acasxu':
-        means = [1.9791091e+04,0.0,0.0,650.0,600.0]
-        stds = [60261.0,6.28318530718,6.28318530718,1100.0,1200.0]
-    else:
-        means = [0.5, 0.5, 0.5]
-        stds = [1, 1, 1]
+    if not is_trained_with_pytorch:
+        if dataset == 'mnist' and not config.geometric:
+            means = [0]
+            stds = [1]
+        elif dataset == 'acasxu':
+            means = [1.9791091e+04,0.0,0.0,650.0,600.0]
+            stds = [60261.0,6.28318530718,6.28318530718,1100.0,1200.0]
+        else:
+            means = [0]
+            stds = [1]
+    is_trained_with_pytorch = is_trained_with_pytorch or is_onnx
 
-is_trained_with_pytorch = is_trained_with_pytorch or is_onnx
+    if config.mean is not None:
+        means = config.mean
+        stds = config.std
+    return eran
+        
+    
 
-if config.mean is not None:
-    means = config.mean
-    stds = config.std
-
-
-correctly_classified_images = 0
-verified_images = 0
-
-
-#if dataset:
-#    if config.input_box is None:
-#        tests = get_tests(dataset, config.geometric)
-#    else:
-#        tests = open(config.input_box, 'r').read()
-
-
-
-
-def run_refinepoly():
+def run_refinepoly(netname, dataset="mnist"):
     global correctly_classified_images, verified_images, domain, epsilon
+    set_config(netname, dataset)
+    eran = init_model()
     model_name = config.netname.split('/')[-3] 
     
     PathX = "benchmark/mnist_challenge/x_y/x"
@@ -595,9 +516,14 @@ def run_refinepoly():
                  temp = verified_safe[k] + verified_unsafe[k]
             writer.writerow(temp)
     
-def refinepoly_run(mnist_tests, true_labels):
+def refinepoly_run(mnist_tests, true_labels, netname, eps, dataset="mnist"):
     global correctly_classified_images, verified_images, domain, epsilon
-    model_name = config.netname.split('/')[-3] 
+    
+    set_config(netname, eps, dataset)
+    eran = init_model()
+    
+    model_name = config.netname.split('/')[-1]
+    model_name = model_name.split('.')[0] 
     
     target = []
     if config.target != None:
@@ -614,11 +540,10 @@ def refinepoly_run(mnist_tests, true_labels):
             eps_array = val  
     
     verified_safe, verified_unsafe = [], []
-
+    failed_index = []
     for i in range(mnist_tests.shape[0]):
         image = mnist_tests[i]
         specLB = np.copy(image)
-        print(specLB.shape)
         specUB = np.copy(image)
         if config.quant_step:
             specLB = np.round(specLB/config.quant_step)
@@ -635,16 +560,11 @@ def refinepoly_run(mnist_tests, true_labels):
 
         #print("specLB ", len(specLB), "specUB ", specUB)
         is_correctly_classified = False
-        if domain == 'gpupoly' or domain == 'refinegpupoly':
-            #specLB = np.reshape(specLB, (32,32,3))#np.ascontiguousarray(specLB, dtype=np.double)
-            #specUB = np.reshape(specUB, (32,32,3))
-            #print("specLB ", specLB)
-            is_correctly_classified = network.test(specLB, specUB, true_labels[i], True)
-        else:
-            label,nn,nlb,nub,_,_ = eran.analyze_box(specLB, specUB, init_domain(domain), config.timeout_lp, config.timeout_milp, config.use_default_heuristic)
-            print("concrete ", nlb[-1])
-            if label == true_labels[i]:
-                is_correctly_classified = True
+   
+        label,nn,nlb,nub,_,_ = eran.analyze_box(specLB, specUB, init_domain(domain), config.timeout_lp, config.timeout_milp, config.use_default_heuristic)
+        print("concrete ", nlb[-1])
+        if true_labels == None or label == true_labels[i]:
+            is_correctly_classified = True
         #for number in range(len(nub)):
         #    for element in range(len(nub[number])):
         #        if(nub[number][element]<=0):
@@ -674,114 +594,58 @@ def refinepoly_run(mnist_tests, true_labels):
                 prop = -1
             else:
                 prop = int(target[i])
-            if domain == 'gpupoly' or domain =='refinegpupoly':
-                is_verified = network.test(specLB, specUB, true_labels[i])
-                #print("res ", res)
-                if is_verified:
-                    print("img", i, "Verified", true_labels[i])
-                    verified_images+=1
-                elif domain == 'refinegpupoly':
-                    # Matrix that computes the difference with the expected layer.
-                    diffMatrix = np.delete(-np.eye(num_outputs), true_labels[i], 0)
-                    diffMatrix[:, label] = 1
-                    diffMatrix = diffMatrix.astype(np.float64)
-                    
-                    # gets the values from GPUPoly.
-                    res=network.evalAffineExpr(diffMatrix, back_substitute=network.BACKSUBSTITUTION_WHILE_CONTAINS_ZERO)
-                    
-                    
-                    labels_to_be_verified = []
-                    num_outputs = len(nn.weights[-1])
-                    var = 0
-                    nn.specLB = specLB
-                    nn.specUB = specUB
-                    nn.predecessors = []
-                    
-                    for pred in range(0,nn.numlayer+1):
-                        predecessor = np.zeros(1, dtype=np.int)
-                        predecessor[0] = int(pred-1)
-                        nn.predecessors.append(predecessor)
-                    #print("predecessors ", nn.predecessors[0][0])
-                    for labels in range(num_outputs):
-                        #print("num_outputs ", num_outputs, nn.numlayer, len(nn.weights[-1]))
-                        if labels != true_labels[i]:
-                            if res[var][0] < 0:
-                                labels_to_be_verified.append(labels)
-                            var = var+1
-                    #print("relu layers", relu_layers)
-                    is_verified, x = refine_gpupoly_results(nn, network, num_gpu_layers, relu_layers, true_labels[i], labels_to_be_verified)
-                    if is_verified:
-                        print("img", i, "Verified", true_labels[i])
-                        verified_images+=1
-                        return 1
+    
+            perturbed_label, _, nlb, nub,failed_labels, x = eran.analyze_box(specLB, specUB, domain, config.timeout_lp, config.timeout_milp, config.use_default_heuristic,label=label, prop=prop)
+            print("nlb ", nlb[-1], " nub ", nub[-1],"adv labels ", failed_labels)
+            if(perturbed_label==label):
+                print("img", i, "Verified", label)
+                verified_images += 1
+                continue
+            else:
+                if complete==True:
+                #if False:
+                    constraints = get_constraints_for_dominant_label(label, failed_labels)
+                    verified_flag,adv_image = verify_network_with_milp(nn, specLB, specUB, nlb, nub, constraints)
+                    if(verified_flag==True):
+                        print("img", i, "Verified as Safe", label)
+                        verified_images += 1
+                        continue
                     else:
-                        if x != None:
-                            adv_image = np.array(x)
-                            res=np.argmax((network.eval(adv_image))[:,0])
-                            if res!=true_labels[i]:
-                                denormalize(x,means, stds, dataset)
-                                print("img", i, "Verified unsafe with adversarial image ", adv_image, "cex label", res, "correct label ", true_labels[i])
-                                return 2
-                            else:
-                                print("img", i, "Failed") 
-                                return 0
-                else:
-                    print("img", i, "Failed")
-                    return 0
-            else:    
-                perturbed_label, _, nlb, nub,failed_labels, x = eran.analyze_box(specLB, specUB, domain, config.timeout_lp, config.timeout_milp, config.use_default_heuristic,label=label, prop=prop)
-                print("nlb ", nlb[-1], " nub ", nub[-1],"adv labels ", failed_labels)
-                if(perturbed_label==label):
-                    print("img", i, "Verified", label)
-                    verified_images += 1
-                    return 1
-                else:
-                    #if complete==True:
-                    if False:
-                        constraints = get_constraints_for_dominant_label(label, failed_labels)
-                        verified_flag,adv_image = verify_network_with_milp(nn, specLB, specUB, nlb, nub, constraints)
-                        if(verified_flag==True):
-                            print("img", i, "Verified as Safe", label)
-                            verified_images += 1
-                            return 1
-                        else:
                         
-                            if adv_image != None:
-                                cex_label,_,_,_,_,_ = eran.analyze_box(adv_image[0], adv_image[0], 'deepzono', config.timeout_lp, config.timeout_milp, config.use_default_heuristic)
-                                if(cex_label!=label):
-                                    denormalize(adv_image[0], means, stds, dataset)
-                                    print("img", i, "Verified unsafe with adversarial image ", adv_image, "cex label", cex_label, "correct label ", label)
-                                    #verified_images+=1
-                                    return 2
-                            print("img", i, "Failed")
-                            return 0
-                    else:
-                    
-                        if x != None:
-                            cex_label,_,_,_,_,_ = eran.analyze_box(x,x,'deepzono',config.timeout_lp, config.timeout_milp, config.use_default_heuristic)
-                            print("cex label ", cex_label, "label ", label)
+                        if adv_image != None:
+                            cex_label,_,_,_,_,_ = eran.analyze_box(adv_image[0], adv_image[0], 'deepzono', config.timeout_lp, config.timeout_milp, config.use_default_heuristic)
                             if(cex_label!=label):
-                                denormalize(x,means, stds, dataset)
-                                print("img", i, "Verified unsafe with adversarial image ", x, "cex label ", cex_label, "correct label ", label)
+                                denormalize(adv_image[0], means, stds, dataset)
+                                print("img", i, "Verified unsafe with adversarial image ", adv_image, "cex label", cex_label, "correct label ", label)
                                 #verified_images+=1
-                                return 2
-                            else:
-                                print("img", i, "Failed")
-                                return 0
+                                continue
+                        print("img", i, "Failed")
+                        failed_index.append(i)
+                else:
+                    
+                    if x != None:
+                        cex_label,_,_,_,_,_ = eran.analyze_box(x,x,'deepzono',config.timeout_lp, config.timeout_milp, config.use_default_heuristic)
+                        print("cex label ", cex_label, "label ", label)
+                        if(cex_label!=label):
+                            denormalize(x,means, stds, dataset)
+                            print("img", i, "Verified unsafe with adversarial image ", x, "cex label ", cex_label, "correct label ", label)
+                               #verified_images+=1
+                            continue
                         else:
                             print("img", i, "Failed")
-                            return 0
-
-                
+                            failed_index.append(i)
+                    else:
+                        print("img", i, "Failed")
+                        failed_index.append(i)
                 end = time.time()
                 print(end - start, "seconds")
         else:
             if domain != "gpupoly" and domain!= "refinegpupoly":
                 print("img",i,"not considered, correct_label", true_labels[i], "classified label ", label)
-
     print('analysis precision ',verified_images,'/ ', correctly_classified_images)
-    print('Num safe testcase:', len(verified_safe))
-    print('Num unsafe testcase:', len(verified_unsafe))
+
+    return failed_index
+
 
 
 

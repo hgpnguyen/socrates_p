@@ -22,9 +22,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 import time
 
-eps = 0.01
+EPS = 0.01
 
-def add_assertion(spec):
+def add_assertion(spec, eps):
     assertion = dict()
 
     assertion['robustness'] = 'local'
@@ -419,7 +419,7 @@ def save_tf_model(path, model, idx):
             ops.append(op)
             wei_biass.append(wei_bias)
 
-    with open(path + 'temp.tf', 'w') as f:
+    with open(path, 'w') as f:
         for op, wei_bias in zip(ops, wei_biass):
             f.write(op+'\n')
             f.write(wei_bias)
@@ -447,8 +447,8 @@ def refineF(x0, idx_ly, const, model, lst_poly, objVal):
     return re
 
 def newApproach(model, x0, models_path):
-    lst_poly = getDeepPoly(model, x0, eps) #May need to get it directly from solver
-    print(sort_layer(model.layers, lst_poly))
+    lst_poly = getDeepPoly(model, x0, EPS) #May need to get it directly from solver
+    #print(sort_layer(model.layers, lst_poly))
     success_lst = []
 
     for idx_ly in sort_layer(model.layers, lst_poly):
@@ -458,7 +458,7 @@ def newApproach(model, x0, models_path):
             neuron_lst = list(range(len(lst_poly[idx_ly+1].lw)))
             start_lst = len(neuron_lst) - 1
 
-        save_tf_model(models_path + "temp/", model, idx_ly)
+        save_tf_model(models_path + "temp/temp.tf", model, idx_ly)
         counter, var_list, refinepoly_model = getModel(models_path + "temp/temp.tf", lst_poly[0].lw, lst_poly[0].up) 
         for i in range(start_lst, len(neuron_lst)):
             try:
@@ -493,18 +493,19 @@ def newApproach(model, x0, models_path):
     return success_lst
 
 def mnist_challenge(model_path, _range, x_path, y_path=None):
-    #list_file = []
-    #with open("deeppoly_failed.csv", 'r') as csvfile: 
-    #    list_file_raw = csv.reader(csvfile, delimiter='\t')
+    model_name = str(model_path).split('/')[-2]
+    #list_file = []   
+    #with open("result_newapproach/{}_refinepoly_failed.csv".format(model_name), 'r') as csvfile: 
+    #    list_file_raw = csv.reader(csvfile, delimiter=',')
     #    for test in list_file_raw:
     #        list_file.append((test[0], ast.literal_eval(test[1])))
     
-    model_name = str(model_path).split('/')[-2]
+    
 
     with open(model_path, 'r') as f:
         spec = json.load(f)
 
-    add_assertion(spec)
+    add_assertion(spec, EPS)
     add_solver(spec)
     model, assertion, solver, display = parse(spec)
     list_potential2, unknow2, find_exp2 = [], [], []
@@ -563,7 +564,7 @@ def mnist_challenge(model_path, _range, x_path, y_path=None):
             
         #unknow2.append((i,unknow))
         find_exp2.append((testfileName, find_exp))
-        with open('result_newapproach/{}_approach_result.csv'.format(model_name), 'a') as f:
+        with open('result_newapproach/{}_approach_cp_refine_result.csv'.format(model_name), 'a') as f:
             writer = csv.writer(f)
             writer.writerows(csv_result)
 
@@ -583,7 +584,7 @@ def main():
     PathX = base_path / "benchmark/mnist_challenge/x_y/x"
     PathY = base_path / "benchmark/mnist_challenge/x_y/y"
 
-    mnist_challenge(model_path, list(range(0,1)), str(PathX), str(PathY))
+    mnist_challenge(model_path, list(range(8, 10)), str(PathX), str(PathY))
 
     #list_file = []
     #with open("deeppoly_failed.csv", 'r') as csvfile: 
